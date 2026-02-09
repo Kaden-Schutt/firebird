@@ -2,6 +2,7 @@
 #define EMUTHREAD_H
 
 #include <QThread>
+#include <QString>
 
 class EmuThread : public QThread
 {
@@ -11,6 +12,14 @@ public:
 
     void doStuff(bool wait);
     void throttleTimerWait(unsigned int usec);
+
+    // MCP accessors
+    bool isPaused() const { return is_paused; }
+
+    // Debug output capture for MCP (thread-local)
+    static thread_local QString *s_captureBuffer;
+    static void beginCapture(QString &buffer) { s_captureBuffer = &buffer; }
+    static void endCapture() { s_captureBuffer = nullptr; }
 
     QString boot1, flash;
     unsigned int port_gdb = 0, port_rdbg = 0;

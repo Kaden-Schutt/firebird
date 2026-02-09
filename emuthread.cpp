@@ -20,6 +20,8 @@
 
 EmuThread emu_thread;
 
+thread_local QString *EmuThread::s_captureBuffer = nullptr;
+
 void gui_do_stuff(bool wait)
 {
     emu_thread.doStuff(wait);
@@ -37,7 +39,12 @@ void gui_debug_printf(const char *fmt, ...)
 
 void gui_debug_vprintf(const char *fmt, va_list ap)
 {
-    emu_thread.debugStr(QString::vasprintf(fmt, ap));
+    QString str = QString::vasprintf(fmt, ap);
+    if (EmuThread::s_captureBuffer) {
+        *EmuThread::s_captureBuffer += str;
+    } else {
+        emu_thread.debugStr(str);
+    }
 }
 
 void gui_status_printf(const char *fmt, ...)

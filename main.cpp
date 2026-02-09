@@ -14,6 +14,12 @@
 #include "qmlbridge.h"
 #include "kitmodel.h"
 
+#include "mcp/mcpserver.h"
+
+#include <cstring>
+
+static bool mcp_mode = false;
+
 #if !defined(NO_TRANSLATION) && defined(IS_IOS_BUILD)
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -73,6 +79,13 @@ static void migrateSettings()
 
 int main(int argc, char **argv)
 {
+    // Check for --mcp flag early
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--mcp") == 0) {
+            mcp_mode = true;
+        }
+    }
+
     #ifdef Q_OS_ANDROID
         QGuiApplication::setAttribute(Qt::AA_DisableHighDpiScaling);
     #else
@@ -131,6 +144,13 @@ int main(int argc, char **argv)
         /*mobile_ui.setResizeMode(QQuickView::SizeRootObjectToView);
         mobile_ui.show();*/
     #endif
+
+    // Start MCP server if --mcp flag was passed
+    MCPServer *mcpServer = nullptr;
+    if (mcp_mode) {
+        mcpServer = new MCPServer();
+        mcpServer->start();
+    }
 
     app.connect(&app, &QGuiApplication::lastWindowClosed, [&] {
         // Apparently QML ApplicationWindow does not count - although

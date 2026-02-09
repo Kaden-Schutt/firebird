@@ -194,7 +194,9 @@ SOURCES += $$ASMCODE_IMPL \
     fbaboutdialog.cpp \
     dockwidget.cpp \
     consolelineedit.cpp \
-    core/cx2.cpp
+    core/cx2.cpp \
+    mcp/mcpserver.cpp \
+    mcp/stdioreader.cpp
 
 FORMS += \
     mainwindow.ui
@@ -243,7 +245,10 @@ HEADERS += \
     fbaboutdialog.h \
     dockwidget.h \
     consolelineedit.h \
-    core/cx2.h
+    core/cx2.h \
+    mcp/mcpserver.h \
+    mcp/stdioreader.h \
+    mcp/keymap_mcp.h
 
 # For localization
 lupdate_only {
