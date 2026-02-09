@@ -894,6 +894,119 @@ void MCPServer::handleToolsList(const QJsonValue &id)
         addTool(QStringLiteral("emulator_ocr_calibrate"), QStringLiteral("Calibrate OCR by providing known text that matches the first text line on screen. Detects font metrics and builds glyph table."), schema);
     }
 
+    // GDB client tools
+    {
+        QJsonObject props;
+        QJsonObject portProp;
+        portProp[QStringLiteral("type")] = QStringLiteral("integer");
+        portProp[QStringLiteral("description")] = QStringLiteral("GDB stub port (default: 3333)");
+        props[QStringLiteral("port")] = portProp;
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        addTool(QStringLiteral("emulator_gdb_connect"), QStringLiteral("Connect to the emulator's GDB stub for fast register/memory access and proper debugging"), schema);
+    }
+
+    {
+        QJsonObject props;
+        QJsonObject addrProp;
+        addrProp[QStringLiteral("type")] = QStringLiteral("string");
+        addrProp[QStringLiteral("description")] = QStringLiteral("Hex address (e.g., '0x10000000')");
+        props[QStringLiteral("address")] = addrProp;
+        QJsonObject sizeProp;
+        sizeProp[QStringLiteral("type")] = QStringLiteral("integer");
+        sizeProp[QStringLiteral("description")] = QStringLiteral("Number of bytes to read (max 1023)");
+        props[QStringLiteral("size")] = sizeProp;
+        QJsonArray required;
+        required.append(QStringLiteral("address"));
+        required.append(QStringLiteral("size"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_gdb_read_memory"), QStringLiteral("Read memory via GDB (halts CPU briefly, then resumes)"), schema);
+    }
+
+    {
+        QJsonObject props;
+        QJsonObject addrProp;
+        addrProp[QStringLiteral("type")] = QStringLiteral("string");
+        addrProp[QStringLiteral("description")] = QStringLiteral("Hex address (e.g., '0x10000000')");
+        props[QStringLiteral("address")] = addrProp;
+        QJsonObject dataProp;
+        dataProp[QStringLiteral("type")] = QStringLiteral("string");
+        dataProp[QStringLiteral("description")] = QStringLiteral("Hex data to write (e.g., '41424344')");
+        props[QStringLiteral("data")] = dataProp;
+        QJsonArray required;
+        required.append(QStringLiteral("address"));
+        required.append(QStringLiteral("data"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_gdb_write_memory"), QStringLiteral("Write memory via GDB (halts CPU briefly, then resumes)"), schema);
+    }
+
+    addTool(QStringLiteral("emulator_gdb_read_registers"), QStringLiteral("Read all ARM registers via GDB in one shot (r0-r15, cpsr)"), emptySchema);
+
+    {
+        QJsonObject props;
+        QJsonObject regProp;
+        regProp[QStringLiteral("type")] = QStringLiteral("string");
+        regProp[QStringLiteral("description")] = QStringLiteral("Register name (r0-r15, sp, lr, pc, cpsr)");
+        props[QStringLiteral("register")] = regProp;
+        QJsonObject valProp;
+        valProp[QStringLiteral("type")] = QStringLiteral("string");
+        valProp[QStringLiteral("description")] = QStringLiteral("Hex value (e.g., '0x10000000')");
+        props[QStringLiteral("value")] = valProp;
+        QJsonArray required;
+        required.append(QStringLiteral("register"));
+        required.append(QStringLiteral("value"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_gdb_set_register"), QStringLiteral("Set a CPU register via GDB"), schema);
+    }
+
+    {
+        QJsonObject props;
+        QJsonObject addrProp;
+        addrProp[QStringLiteral("type")] = QStringLiteral("string");
+        addrProp[QStringLiteral("description")] = QStringLiteral("Hex address for breakpoint");
+        props[QStringLiteral("address")] = addrProp;
+        QJsonObject setProp;
+        setProp[QStringLiteral("type")] = QStringLiteral("boolean");
+        setProp[QStringLiteral("description")] = QStringLiteral("true to set, false to clear");
+        props[QStringLiteral("set")] = setProp;
+        QJsonArray required;
+        required.append(QStringLiteral("address"));
+        required.append(QStringLiteral("set"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_gdb_breakpoint"), QStringLiteral("Set or clear an execution breakpoint via GDB"), schema);
+    }
+
+    addTool(QStringLiteral("emulator_gdb_continue"), QStringLiteral("Resume execution via GDB (after step or breakpoint hit)"), emptySchema);
+    addTool(QStringLiteral("emulator_gdb_step"), QStringLiteral("Single step one instruction via GDB. Returns registers at new PC. CPU stays halted."), emptySchema);
+
+    {
+        QJsonObject props;
+        QJsonObject pktProp;
+        pktProp[QStringLiteral("type")] = QStringLiteral("string");
+        pktProp[QStringLiteral("description")] = QStringLiteral("Raw GDB packet payload (without $...#XX framing)");
+        props[QStringLiteral("packet")] = pktProp;
+        QJsonArray required;
+        required.append(QStringLiteral("packet"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_gdb_raw"), QStringLiteral("Send a raw GDB RSP packet and return the response"), schema);
+    }
+
     QJsonObject result;
     result[QStringLiteral("tools")] = tools;
 
@@ -997,6 +1110,24 @@ void MCPServer::handleToolsCall(const QJsonValue &id, const QJsonObject &params)
         result = toolEmulatorOcr(args);
     } else if (name == QStringLiteral("emulator_ocr_calibrate")) {
         result = toolEmulatorOcrCalibrate(args);
+    } else if (name == QStringLiteral("emulator_gdb_connect")) {
+        result = toolEmulatorGdbConnect(args);
+    } else if (name == QStringLiteral("emulator_gdb_read_memory")) {
+        result = toolEmulatorGdbReadMemory(args);
+    } else if (name == QStringLiteral("emulator_gdb_write_memory")) {
+        result = toolEmulatorGdbWriteMemory(args);
+    } else if (name == QStringLiteral("emulator_gdb_read_registers")) {
+        result = toolEmulatorGdbReadRegisters();
+    } else if (name == QStringLiteral("emulator_gdb_set_register")) {
+        result = toolEmulatorGdbSetRegister(args);
+    } else if (name == QStringLiteral("emulator_gdb_breakpoint")) {
+        result = toolEmulatorGdbBreakpoint(args);
+    } else if (name == QStringLiteral("emulator_gdb_continue")) {
+        result = toolEmulatorGdbContinue();
+    } else if (name == QStringLiteral("emulator_gdb_step")) {
+        result = toolEmulatorGdbStep();
+    } else if (name == QStringLiteral("emulator_gdb_raw")) {
+        result = toolEmulatorGdbRaw(args);
     } else {
         sendError(id, -32602, QStringLiteral("Unknown tool: ") + name);
         return;
@@ -1222,6 +1353,10 @@ QJsonObject MCPServer::toolEmulatorStart(const QJsonObject &args)
     }
 
     QString snapshotPath = args.value(QStringLiteral("snapshot_path")).toString();
+
+    // Enable GDB stub by default for MCP GDB client tools
+    if (emu_thread.port_gdb == 0)
+        emu_thread.port_gdb = 3333;
 
     bool success = false;
     if (!snapshotPath.isEmpty()) {
@@ -2995,5 +3130,437 @@ QJsonObject MCPServer::toolEmulatorOcr(const QJsonObject &args)
         result[QStringLiteral("hint")] = QStringLiteral("Run emulator_ocr_calibrate with known text to improve recognition");
     }
     result[QStringLiteral("calibrated")] = (m_ocrCharWidth > 0);
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB RSP protocol helpers ============
+
+static const char hexLut[] = "0123456789abcdef";
+
+void MCPServer::gdbSendPacket(const QByteArray &payload)
+{
+    uint8_t cksum = 0;
+    for (char c : payload) cksum += static_cast<uint8_t>(c);
+
+    QByteArray pkt;
+    pkt.reserve(payload.size() + 4);
+    pkt.append('$');
+    pkt.append(payload);
+    pkt.append('#');
+    pkt.append(hexLut[cksum >> 4]);
+    pkt.append(hexLut[cksum & 0xf]);
+
+    m_gdbSocket->write(pkt);
+    m_gdbSocket->flush();
+}
+
+QByteArray MCPServer::gdbReadPacket(int timeoutMs)
+{
+    QByteArray buf;
+    QElapsedTimer timer;
+    timer.start();
+
+    while (timer.elapsed() < timeoutMs) {
+        if (m_gdbSocket->bytesAvailable() > 0 || m_gdbSocket->waitForReadyRead(50)) {
+            buf.append(m_gdbSocket->readAll());
+        }
+
+        // Skip ack bytes
+        while (!buf.isEmpty() && (buf[0] == '+' || buf[0] == '-'))
+            buf.remove(0, 1);
+
+        // Look for $payload#XX
+        int start = buf.indexOf('$');
+        if (start >= 0) {
+            int hash = buf.indexOf('#', start + 1);
+            if (hash >= 0 && hash + 2 < buf.size()) {
+                QByteArray payload = buf.mid(start + 1, hash - start - 1);
+                // Ack the packet
+                m_gdbSocket->write("+", 1);
+                m_gdbSocket->flush();
+                return payload;
+            }
+        }
+    }
+    return QByteArray();
+}
+
+QByteArray MCPServer::gdbCommand(const QByteArray &cmd, int timeoutMs)
+{
+    gdbSendPacket(cmd);
+
+    QByteArray resp = gdbReadPacket(timeoutMs);
+
+    // If we got a stop reply (CPU just halted), absorb it and read the actual response
+    while (!resp.isEmpty() && (resp[0] == 'T' || resp[0] == 'S' || resp[0] == 'W')) {
+        resp = gdbReadPacket(timeoutMs);
+    }
+
+    return resp;
+}
+
+// ============ GDB tool: connect ============
+
+QJsonObject MCPServer::toolEmulatorGdbConnect(const QJsonObject &args)
+{
+    if (!emu_thread.isRunning()) {
+        return makeToolError(QStringLiteral("Emulator is not running"));
+    }
+
+    int port = args.value(QStringLiteral("port")).toInt(3333);
+
+    // Clean up existing connection
+    if (m_gdbSocket) {
+        m_gdbSocket->disconnectFromHost();
+        delete m_gdbSocket;
+        m_gdbSocket = nullptr;
+    }
+
+    m_gdbSocket = new QTcpSocket(this);
+    m_gdbSocket->connectToHost(QStringLiteral("127.0.0.1"), port);
+
+    if (!m_gdbSocket->waitForConnected(3000)) {
+        QString err = m_gdbSocket->errorString();
+        delete m_gdbSocket;
+        m_gdbSocket = nullptr;
+        return makeToolError(QStringLiteral("Failed to connect to GDB stub on port %1: %2. "
+            "Ensure the emulator was started with GDB enabled.").arg(port).arg(err));
+    }
+
+    // Send '?' to trigger initial halt and handshake
+    // The response to '?' IS a stop reply (T05...), so use gdbReadPacket directly
+    gdbSendPacket("?");
+    QByteArray stopReply = gdbReadPacket(5000);
+    // CPU is now halted in gdbstub_loop, waiting for next command
+
+    // Read registers for info
+    QByteArray regResp = gdbCommand("g", 3000);
+
+    // Resume the CPU
+    gdbSendPacket("c");
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("port")] = port;
+    result[QStringLiteral("message")] = QStringLiteral("Connected to GDB stub. CPU resumed.");
+
+    // Parse PC from register data if available
+    if (regResp.size() >= 16 * 8) {
+        // Registers are little-endian 32-bit values as hex
+        // PC is register 15, at offset 15*8 = 120
+        QByteArray pcHex = regResp.mid(15 * 8, 8);
+        // GDB sends registers in target byte order (little-endian)
+        // So bytes are: b0 b1 b2 b3 as hex pairs
+        bool ok;
+        uint32_t pcLE = pcHex.toUInt(&ok, 16);
+        if (ok) {
+            // Byte-swap from LE wire format: the hex string is LE bytes
+            // e.g., "78563412" means 0x12345678
+            uint32_t pc = ((pcLE >> 24) & 0xFF) | ((pcLE >> 8) & 0xFF00)
+                        | ((pcLE << 8) & 0xFF0000) | ((pcLE << 24) & 0xFF000000);
+            result[QStringLiteral("pc")] = QStringLiteral("0x%1").arg(pc, 8, 16, QLatin1Char('0'));
+        }
+    }
+
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// Helper: parse 32-bit LE hex from GDB register dump
+static uint32_t parseGdbReg(const QByteArray &data, int regIndex)
+{
+    int offset = regIndex * 8;
+    if (offset + 8 > data.size()) return 0;
+
+    // GDB sends registers as little-endian hex bytes
+    // e.g., register value 0x12345678 is sent as "78563412"
+    uint32_t val = 0;
+    for (int i = 0; i < 4; ++i) {
+        int hi = (offset + i * 2 < data.size()) ? data[offset + i * 2] : '0';
+        int lo = (offset + i * 2 + 1 < data.size()) ? data[offset + i * 2 + 1] : '0';
+        auto hexVal = [](int c) -> uint8_t {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return 0;
+        };
+        uint8_t byte = (hexVal(hi) << 4) | hexVal(lo);
+        val |= static_cast<uint32_t>(byte) << (i * 8);
+    }
+    return val;
+}
+
+// Helper: encode 32-bit value as LE hex for GDB
+static QByteArray encodeGdbReg(uint32_t val)
+{
+    QByteArray out;
+    out.reserve(8);
+    for (int i = 0; i < 4; ++i) {
+        uint8_t byte = (val >> (i * 8)) & 0xFF;
+        out.append(hexLut[byte >> 4]);
+        out.append(hexLut[byte & 0xf]);
+    }
+    return out;
+}
+
+// ============ GDB tool: read memory ============
+
+QJsonObject MCPServer::toolEmulatorGdbReadMemory(const QJsonObject &args)
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    QString addrStr = args.value(QStringLiteral("address")).toString();
+    int size = args.value(QStringLiteral("size")).toInt();
+
+    if (size <= 0 || size > 1023) {
+        return makeToolError(QStringLiteral("Size must be 1-1023 (GDB packet buffer limit)"));
+    }
+
+    uint32_t addr = addrStr.toUInt(nullptr, 0);
+
+    QByteArray cmd = QByteArray("m") + QByteArray::number(addr, 16) + "," + QByteArray::number(size, 16);
+    QByteArray resp = gdbCommand(cmd, 5000);
+
+    // Resume CPU
+    gdbSendPacket("c");
+
+    if (resp.isEmpty()) {
+        return makeToolError(QStringLiteral("Timeout reading memory"));
+    }
+    if (resp.startsWith('E')) {
+        return makeToolError(QStringLiteral("GDB error: ") + QString::fromLatin1(resp));
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("address")] = QStringLiteral("0x%1").arg(addr, 8, 16, QLatin1Char('0'));
+    result[QStringLiteral("size")] = size;
+    result[QStringLiteral("hex")] = QString::fromLatin1(resp);
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: write memory ============
+
+QJsonObject MCPServer::toolEmulatorGdbWriteMemory(const QJsonObject &args)
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    QString addrStr = args.value(QStringLiteral("address")).toString();
+    QString dataHex = args.value(QStringLiteral("data")).toString();
+
+    uint32_t addr = addrStr.toUInt(nullptr, 0);
+    int len = dataHex.length() / 2;
+
+    QByteArray cmd = QByteArray("M") + QByteArray::number(addr, 16) + ","
+                   + QByteArray::number(len, 16) + ":" + dataHex.toLatin1();
+    QByteArray resp = gdbCommand(cmd, 5000);
+
+    gdbSendPacket("c");
+
+    if (resp.isEmpty()) {
+        return makeToolError(QStringLiteral("Timeout writing memory"));
+    }
+    if (resp.startsWith('E')) {
+        return makeToolError(QStringLiteral("GDB error: ") + QString::fromLatin1(resp));
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("address")] = QStringLiteral("0x%1").arg(addr, 8, 16, QLatin1Char('0'));
+    result[QStringLiteral("bytes_written")] = len;
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: read registers ============
+
+QJsonObject MCPServer::toolEmulatorGdbReadRegisters()
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    QByteArray resp = gdbCommand("g", 5000);
+
+    gdbSendPacket("c");
+
+    if (resp.isEmpty()) {
+        return makeToolError(QStringLiteral("Timeout reading registers"));
+    }
+    if (resp.startsWith('E')) {
+        return makeToolError(QStringLiteral("GDB error: ") + QString::fromLatin1(resp));
+    }
+
+    // Parse the register dump: 42 registers × 8 hex chars each
+    // R0-R15 (indices 0-15), CPSR (index 41)
+    static const char *regNames[] = {
+        "r0","r1","r2","r3","r4","r5","r6","r7",
+        "r8","r9","r10","r11","r12","sp","lr","pc"
+    };
+
+    QJsonObject regs;
+    for (int i = 0; i < 16; ++i) {
+        uint32_t val = parseGdbReg(resp, i);
+        regs[QString::fromLatin1(regNames[i])] = QStringLiteral("0x%1").arg(val, 8, 16, QLatin1Char('0'));
+    }
+    // CPSR is register index 41
+    uint32_t cpsr = parseGdbReg(resp, 41);
+    regs[QStringLiteral("cpsr")] = QStringLiteral("0x%1").arg(cpsr, 8, 16, QLatin1Char('0'));
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("registers")] = regs;
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: set register ============
+
+QJsonObject MCPServer::toolEmulatorGdbSetRegister(const QJsonObject &args)
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    QString regName = args.value(QStringLiteral("register")).toString().toLower();
+    QString valStr = args.value(QStringLiteral("value")).toString();
+    uint32_t value = valStr.toUInt(nullptr, 0);
+
+    // Map register name to GDB index
+    int regIndex = -1;
+    if (regName.startsWith(QLatin1Char('r'))) {
+        bool ok;
+        int n = regName.midRef(1).toInt(&ok);
+        if (ok && n >= 0 && n <= 15) regIndex = n;
+    }
+    if (regName == QStringLiteral("sp")) regIndex = 13;
+    else if (regName == QStringLiteral("lr")) regIndex = 14;
+    else if (regName == QStringLiteral("pc")) regIndex = 15;
+    else if (regName == QStringLiteral("cpsr")) regIndex = 41;
+
+    if (regIndex < 0) {
+        return makeToolError(QStringLiteral("Unknown register: ") + regName);
+    }
+
+    // GDB 'P' packet: Pn=VVVVVVVV (register index in hex, value as LE hex)
+    QByteArray cmd = QByteArray("P") + QByteArray::number(regIndex, 16) + "=" + encodeGdbReg(value);
+    QByteArray resp = gdbCommand(cmd, 5000);
+
+    gdbSendPacket("c");
+
+    if (resp != "OK") {
+        return makeToolError(QStringLiteral("GDB error setting register: ") + QString::fromLatin1(resp));
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("register")] = regName;
+    result[QStringLiteral("value")] = QStringLiteral("0x%1").arg(value, 8, 16, QLatin1Char('0'));
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: breakpoint ============
+
+QJsonObject MCPServer::toolEmulatorGdbBreakpoint(const QJsonObject &args)
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    QString addrStr = args.value(QStringLiteral("address")).toString();
+    bool set = args.value(QStringLiteral("set")).toBool(true);
+    uint32_t addr = addrStr.toUInt(nullptr, 0);
+
+    // Z0,addr,4 = set software breakpoint; z0,addr,4 = clear
+    QByteArray cmd;
+    cmd.append(set ? 'Z' : 'z');
+    cmd.append("0,");
+    cmd.append(QByteArray::number(addr, 16));
+    cmd.append(",4");
+
+    QByteArray resp = gdbCommand(cmd, 5000);
+
+    gdbSendPacket("c");
+
+    if (resp != "OK") {
+        return makeToolError(QStringLiteral("GDB error: ") + QString::fromLatin1(resp));
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("address")] = QStringLiteral("0x%1").arg(addr, 8, 16, QLatin1Char('0'));
+    result[QStringLiteral("action")] = set ? QStringLiteral("set") : QStringLiteral("cleared");
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: continue ============
+
+QJsonObject MCPServer::toolEmulatorGdbContinue()
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    gdbSendPacket("c");
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("message")] = QStringLiteral("Execution resumed");
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: step ============
+
+QJsonObject MCPServer::toolEmulatorGdbStep()
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    // Send step command
+    gdbSendPacket("s");
+
+    // Wait for the stop reply (CPU executes one instruction, then halts)
+    QByteArray stopReply = gdbReadPacket(5000);
+
+    // Now read registers at the new PC
+    QByteArray regResp = gdbCommand("g", 3000);
+
+    // CPU stays halted — user must call gdb_continue to resume
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("halted")] = true;
+
+    if (!stopReply.isEmpty()) {
+        result[QStringLiteral("stop_reply")] = QString::fromLatin1(stopReply);
+    }
+
+    if (regResp.size() >= 16 * 8) {
+        uint32_t pc = parseGdbReg(regResp, 15);
+        uint32_t cpsr = parseGdbReg(regResp, 41);
+        result[QStringLiteral("pc")] = QStringLiteral("0x%1").arg(pc, 8, 16, QLatin1Char('0'));
+        result[QStringLiteral("cpsr")] = QStringLiteral("0x%1").arg(cpsr, 8, 16, QLatin1Char('0'));
+        result[QStringLiteral("thumb")] = (cpsr & 0x20) != 0;
+    }
+
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+// ============ GDB tool: raw packet ============
+
+QJsonObject MCPServer::toolEmulatorGdbRaw(const QJsonObject &args)
+{
+    if (!m_gdbSocket || m_gdbSocket->state() != QAbstractSocket::ConnectedState) {
+        return makeToolError(QStringLiteral("GDB not connected. Call emulator_gdb_connect first."));
+    }
+
+    QString packet = args.value(QStringLiteral("packet")).toString();
+    QByteArray resp = gdbCommand(packet.toLatin1(), 5000);
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = !resp.isEmpty();
+    result[QStringLiteral("response")] = QString::fromLatin1(resp);
     return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
 }

@@ -10,6 +10,7 @@
 #include <QWaitCondition>
 #include <QHash>
 #include <QByteArray>
+#include <QTcpSocket>
 
 class StdioReader;
 
@@ -87,10 +88,26 @@ private:
     QJsonObject toolEmulatorOcr(const QJsonObject &args);
     QJsonObject toolEmulatorOcrCalibrate(const QJsonObject &args);
 
+    // GDB client tools
+    QJsonObject toolEmulatorGdbConnect(const QJsonObject &args);
+    QJsonObject toolEmulatorGdbReadMemory(const QJsonObject &args);
+    QJsonObject toolEmulatorGdbWriteMemory(const QJsonObject &args);
+    QJsonObject toolEmulatorGdbReadRegisters();
+    QJsonObject toolEmulatorGdbSetRegister(const QJsonObject &args);
+    QJsonObject toolEmulatorGdbBreakpoint(const QJsonObject &args);
+    QJsonObject toolEmulatorGdbContinue();
+    QJsonObject toolEmulatorGdbStep();
+    QJsonObject toolEmulatorGdbRaw(const QJsonObject &args);
+
     // Internal helpers
     bool waitForStableScreen(int timeoutMs, int stableMs, int intervalMs, QString *screenshotPath = nullptr);
     bool pressKeyAndWaitForTransition(const QString &keyName, int changeTimeoutMs = 3000, int stableMs = 300, int intervalMs = 50, QString *screenshotPath = nullptr);
     void simulateArrow(const QString &direction);
+
+    // GDB protocol helpers
+    void gdbSendPacket(const QByteArray &payload);
+    QByteArray gdbReadPacket(int timeoutMs = 5000);
+    QByteArray gdbCommand(const QByteArray &cmd, int timeoutMs = 5000);
 
     // Helper to build tool result
     QJsonObject makeToolResult(const QString &text);
@@ -105,6 +122,9 @@ private:
     int m_ocrCharHeight = 0;
     int m_ocrBaselineX = 0;
     int m_ocrBaselineY = 0;
+
+    // GDB client state
+    QTcpSocket *m_gdbSocket = nullptr;
 
 public:
     // For async file operations (public for callbacks)
