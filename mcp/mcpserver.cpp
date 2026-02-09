@@ -11,6 +11,7 @@
 
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
 #include "emuthread.h"
 #include "qmlbridge.h"
@@ -813,6 +814,86 @@ void MCPServer::handleToolsList(const QJsonValue &id)
         addTool(QStringLiteral("emulator_deploy_and_run"), QStringLiteral("Upload a .tns file to the calculator, navigate to it in My Documents, and open it. Returns a screenshot of the result. One-shot build-test workflow."), schema);
     }
 
+    // Raw touchpad control
+    {
+        QJsonObject props;
+        QJsonObject xProp;
+        xProp[QStringLiteral("type")] = QStringLiteral("number");
+        xProp[QStringLiteral("description")] = QStringLiteral("X position (0.0-1.0)");
+        props[QStringLiteral("x")] = xProp;
+        QJsonObject yProp;
+        yProp[QStringLiteral("type")] = QStringLiteral("number");
+        yProp[QStringLiteral("description")] = QStringLiteral("Y position (0.0-1.0)");
+        props[QStringLiteral("y")] = yProp;
+        QJsonObject contactProp;
+        contactProp[QStringLiteral("type")] = QStringLiteral("boolean");
+        contactProp[QStringLiteral("description")] = QStringLiteral("Finger touching touchpad");
+        props[QStringLiteral("contact")] = contactProp;
+        QJsonObject downProp;
+        downProp[QStringLiteral("type")] = QStringLiteral("boolean");
+        downProp[QStringLiteral("description")] = QStringLiteral("Touchpad clicked/pressed");
+        props[QStringLiteral("down")] = downProp;
+        QJsonArray required;
+        required.append(QStringLiteral("x"));
+        required.append(QStringLiteral("y"));
+        required.append(QStringLiteral("contact"));
+        required.append(QStringLiteral("down"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_touchpad"), QStringLiteral("Raw touchpad control (x/y position, contact, press). For directional nav, prefer emulator_arrow."), schema);
+    }
+
+    addTool(QStringLiteral("emulator_get_screen_info"), QStringLiteral("Get screen dimensions and basic state info"), emptySchema);
+
+    {
+        QJsonObject props;
+        QJsonObject opsProp;
+        opsProp[QStringLiteral("type")] = QStringLiteral("array");
+        opsProp[QStringLiteral("description")] = QStringLiteral("Array of operations: [{\"op\":\"key\",\"key\":\"enter\"}, {\"op\":\"nav\",\"dir\":\"down\"}, {\"op\":\"wait\",\"ms\":100}, {\"op\":\"type\",\"text\":\"hello\"}, {\"op\":\"wait_stable\",\"timeout_ms\":5000,\"stable_ms\":300}]");
+        props[QStringLiteral("operations")] = opsProp;
+        QJsonArray required;
+        required.append(QStringLiteral("operations"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_run_macro"), QStringLiteral("Run a sequence of operations (key presses, arrow navigation, waits, text input, wait_stable). Reduces round-trips for multi-step interactions."), schema);
+    }
+
+    // OCR tools
+    {
+        QJsonObject props;
+        QJsonObject lineStartProp;
+        lineStartProp[QStringLiteral("type")] = QStringLiteral("integer");
+        lineStartProp[QStringLiteral("description")] = QStringLiteral("First text line to read (0-based, default: 0)");
+        props[QStringLiteral("line_start")] = lineStartProp;
+        QJsonObject lineCountProp;
+        lineCountProp[QStringLiteral("type")] = QStringLiteral("integer");
+        lineCountProp[QStringLiteral("description")] = QStringLiteral("Number of text lines to read (default: all)");
+        props[QStringLiteral("line_count")] = lineCountProp;
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        addTool(QStringLiteral("emulator_ocr"), QStringLiteral("Read text from the calculator screen using glyph-based OCR. Run emulator_ocr_calibrate first for best results."), schema);
+    }
+
+    {
+        QJsonObject props;
+        QJsonObject knownTextProp;
+        knownTextProp[QStringLiteral("type")] = QStringLiteral("string");
+        knownTextProp[QStringLiteral("description")] = QStringLiteral("Known text matching the first visible text line on screen. Include ALL characters exactly as displayed.");
+        props[QStringLiteral("known_text")] = knownTextProp;
+        QJsonArray required;
+        required.append(QStringLiteral("known_text"));
+        QJsonObject schema;
+        schema[QStringLiteral("type")] = QStringLiteral("object");
+        schema[QStringLiteral("properties")] = props;
+        schema[QStringLiteral("required")] = required;
+        addTool(QStringLiteral("emulator_ocr_calibrate"), QStringLiteral("Calibrate OCR by providing known text that matches the first text line on screen. Detects font metrics and builds glyph table."), schema);
+    }
+
     QJsonObject result;
     result[QStringLiteral("tools")] = tools;
 
@@ -908,12 +989,218 @@ void MCPServer::handleToolsCall(const QJsonValue &id, const QJsonObject &params)
         result = toolEmulatorFindFunctions(args);
     } else if (name == QStringLiteral("emulator_deploy_and_run")) {
         result = toolEmulatorDeployAndRun(args);
+    } else if (name == QStringLiteral("emulator_get_screen_info")) {
+        result = toolEmulatorGetScreenInfo();
+    } else if (name == QStringLiteral("emulator_run_macro")) {
+        result = toolEmulatorRunMacro(args);
+    } else if (name == QStringLiteral("emulator_ocr")) {
+        result = toolEmulatorOcr(args);
+    } else if (name == QStringLiteral("emulator_ocr_calibrate")) {
+        result = toolEmulatorOcrCalibrate(args);
     } else {
         sendError(id, -32602, QStringLiteral("Unknown tool: ") + name);
         return;
     }
 
     sendResult(id, result);
+}
+
+// OCR helpers
+
+static QVector<bool> framebufferToBinary(const QImage &image, int threshold = 128)
+{
+    int w = image.width();
+    int h = image.height();
+    QVector<bool> binary(w * h, false);
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            QRgb pixel = image.pixel(x, y);
+            int gray = qGray(pixel);
+            binary[y * w + x] = (gray < threshold);
+        }
+    }
+    return binary;
+}
+
+struct FontMetrics {
+    int charWidth;
+    int charHeight;
+    int startX;
+    int startY;
+    int cols;
+    int rows;
+    bool valid;
+};
+
+static FontMetrics detectFontMetrics(const QVector<bool> &binary, int imgW, int imgH)
+{
+    FontMetrics fm = {0, 0, 0, 0, 0, 0, false};
+
+    QVector<int> rowDensity(imgH, 0);
+    for (int y = 0; y < imgH; ++y) {
+        for (int x = 0; x < imgW; ++x) {
+            if (binary[y * imgW + x]) rowDensity[y]++;
+        }
+    }
+
+    QVector<QPair<int,int>> textBands;
+    bool inBand = false;
+    int bandStart = 0;
+    int minDensity = imgW / 100;
+
+    for (int y = 0; y < imgH; ++y) {
+        if (rowDensity[y] > minDensity) {
+            if (!inBand) { bandStart = y; inBand = true; }
+        } else {
+            if (inBand) {
+                textBands.append({bandStart, y});
+                inBand = false;
+            }
+        }
+    }
+    if (inBand) textBands.append({bandStart, imgH});
+
+    if (textBands.size() < 2) {
+        minDensity = 1;
+        textBands.clear();
+        inBand = false;
+        for (int y = 0; y < imgH; ++y) {
+            if (rowDensity[y] > minDensity) {
+                if (!inBand) { bandStart = y; inBand = true; }
+            } else {
+                if (inBand) { textBands.append({bandStart, y}); inBand = false; }
+            }
+        }
+        if (inBand) textBands.append({bandStart, imgH});
+    }
+
+    if (textBands.size() < 2) return fm;
+
+    QMap<int, int> heightCounts;
+    for (const auto &band : textBands) {
+        int h = band.second - band.first;
+        if (h >= 6 && h <= 20) heightCounts[h]++;
+    }
+
+    int bestHeight = 0, bestCount = 0;
+    for (auto it = heightCounts.begin(); it != heightCounts.end(); ++it) {
+        if (it.value() > bestCount) {
+            bestCount = it.value();
+            bestHeight = it.key();
+        }
+    }
+
+    if (bestHeight == 0) return fm;
+
+    QVector<int> spacings;
+    for (int i = 1; i < textBands.size(); ++i) {
+        int spacing = textBands[i].first - textBands[i-1].first;
+        if (spacing >= bestHeight && spacing <= bestHeight * 2)
+            spacings.append(spacing);
+    }
+
+    int lineHeight = bestHeight;
+    if (!spacings.isEmpty()) {
+        std::sort(spacings.begin(), spacings.end());
+        lineHeight = spacings[spacings.size() / 2];
+    }
+
+    int bestBand = 0;
+    int bestBandDensity = 0;
+    for (int i = 0; i < textBands.size(); ++i) {
+        int h = textBands[i].second - textBands[i].first;
+        if (qAbs(h - bestHeight) <= 2) {
+            int density = 0;
+            for (int y = textBands[i].first; y < textBands[i].second; ++y)
+                density += rowDensity[y];
+            if (density > bestBandDensity) {
+                bestBandDensity = density;
+                bestBand = i;
+            }
+        }
+    }
+
+    int by0 = textBands[bestBand].first;
+    int by1 = textBands[bestBand].second;
+    QVector<int> colDensity(imgW, 0);
+    for (int x = 0; x < imgW; ++x) {
+        for (int y = by0; y < by1; ++y) {
+            if (binary[y * imgW + x]) colDensity[x]++;
+        }
+    }
+
+    QVector<int> gapPositions;
+    for (int x = 1; x < imgW - 1; ++x) {
+        if (colDensity[x] == 0 && (colDensity[x-1] > 0 || colDensity[x+1] > 0))
+            gapPositions.append(x);
+    }
+
+    int bestWidth = 0;
+    int bestWidthScore = 0;
+    for (int tryWidth = 5; tryWidth <= 10; ++tryWidth) {
+        int score = 0;
+        for (int gap : gapPositions) {
+            for (int offset = 0; offset < tryWidth; ++offset) {
+                if ((gap - offset) % tryWidth == 0) {
+                    score++;
+                    break;
+                }
+            }
+        }
+        int chars = imgW / tryWidth;
+        if (chars >= 30 && chars <= 60) score += 5;
+        if (score > bestWidthScore) {
+            bestWidthScore = score;
+            bestWidth = tryWidth;
+        }
+    }
+
+    if (bestWidth == 0) bestWidth = 6;
+
+    fm.charWidth = bestWidth;
+    fm.charHeight = lineHeight;
+    fm.startX = 0;
+    fm.startY = textBands[0].first;
+    fm.cols = imgW / bestWidth;
+    fm.rows = (imgH - fm.startY) / lineHeight;
+    fm.valid = true;
+
+    for (int x = 0; x < imgW; ++x) {
+        bool hasDark = false;
+        for (int y = 0; y < imgH && !hasDark; ++y)
+            hasDark = binary[y * imgW + x];
+        if (hasDark) { fm.startX = x; break; }
+    }
+    fm.startX = (fm.startX / fm.charWidth) * fm.charWidth;
+    fm.cols = (imgW - fm.startX) / fm.charWidth;
+
+    return fm;
+}
+
+static QByteArray extractGlyph(const QVector<bool> &binary, int imgW,
+                                int cellX, int cellY, int cellW, int cellH)
+{
+    QByteArray glyph;
+    glyph.reserve((cellW * cellH + 7) / 8);
+
+    uint8_t byte = 0;
+    int bit = 0;
+    for (int y = cellY; y < cellY + cellH && y < 240; ++y) {
+        for (int x = cellX; x < cellX + cellW && x < 320; ++x) {
+            if (binary[y * imgW + x])
+                byte |= (1 << bit);
+            bit++;
+            if (bit == 8) {
+                glyph.append(static_cast<char>(byte));
+                byte = 0;
+                bit = 0;
+            }
+        }
+    }
+    if (bit > 0) glyph.append(static_cast<char>(byte));
+
+    return glyph;
 }
 
 // Tool implementations
@@ -1136,15 +1423,28 @@ QJsonObject MCPServer::toolEmulatorTypeText(const QJsonObject &args)
 
 QJsonObject MCPServer::toolEmulatorTouchpad(const QJsonObject &args)
 {
-    float x = args.value(QStringLiteral("x")).toDouble();
-    float y = args.value(QStringLiteral("y")).toDouble();
+    if (!emu_thread.isRunning()) {
+        return makeToolError(QStringLiteral("Emulator is not running"));
+    }
+
+    double x = args.value(QStringLiteral("x")).toDouble();
+    double y = args.value(QStringLiteral("y")).toDouble();
     bool contact = args.value(QStringLiteral("contact")).toBool();
     bool down = args.value(QStringLiteral("down")).toBool();
 
-    touchpad_set_state(x, y, contact, down);
+    keypad.touchpad_x = static_cast<uint16_t>(x * TOUCHPAD_X_MAX);
+    keypad.touchpad_y = static_cast<uint16_t>(y * TOUCHPAD_Y_MAX);
+    keypad.touchpad_contact = contact;
+    keypad.touchpad_down = down;
+    keypad.kpc.gpio_int_active |= 0x800;
+    keypad_int_check();
 
     QJsonObject result;
     result[QStringLiteral("success")] = true;
+    result[QStringLiteral("x")] = x;
+    result[QStringLiteral("y")] = y;
+    result[QStringLiteral("contact")] = contact;
+    result[QStringLiteral("down")] = down;
     return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
 }
 
@@ -2469,5 +2769,231 @@ QJsonObject MCPServer::toolEmulatorDeployAndRun(const QJsonObject &args)
     result[QStringLiteral("local_path")] = localPath;
     result[QStringLiteral("calc_path")] = calcPath;
     result[QStringLiteral("screenshot")] = screenshotPath;
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+QJsonObject MCPServer::toolEmulatorGetScreenInfo()
+{
+    if (!emu_thread.isRunning()) {
+        return makeToolError(QStringLiteral("Emulator is not running"));
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("running")] = true;
+    result[QStringLiteral("width")] = 320;
+    result[QStringLiteral("height")] = 240;
+    result[QStringLiteral("paused")] = emu_thread.isPaused();
+    result[QStringLiteral("turbo")] = turbo_mode;
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+QJsonObject MCPServer::toolEmulatorRunMacro(const QJsonObject &args)
+{
+    if (!emu_thread.isRunning()) {
+        return makeToolError(QStringLiteral("Emulator is not running"));
+    }
+
+    QJsonArray operations = args.value(QStringLiteral("operations")).toArray();
+    if (operations.isEmpty()) {
+        return makeToolError(QStringLiteral("Operations array is required"));
+    }
+
+    int executed = 0;
+    for (const QJsonValue &opVal : operations) {
+        QJsonObject op = opVal.toObject();
+        QString opType = op.value(QStringLiteral("op")).toString().toLower();
+
+        if (opType == QStringLiteral("key")) {
+            QString key = op.value(QStringLiteral("key")).toString();
+            int duration = op.value(QStringLiteral("duration")).toInt(50);
+            QJsonObject keyArgs;
+            keyArgs[QStringLiteral("key")] = key;
+            keyArgs[QStringLiteral("duration_ms")] = duration;
+            toolEmulatorPressKey(keyArgs);
+
+        } else if (opType == QStringLiteral("nav") || opType == QStringLiteral("arrow")) {
+            QString dir = op.value(QStringLiteral("dir")).toString();
+            simulateArrow(dir);
+
+        } else if (opType == QStringLiteral("wait")) {
+            int ms = op.value(QStringLiteral("ms")).toInt(100);
+            QThread::msleep(ms);
+
+        } else if (opType == QStringLiteral("type")) {
+            QString text = op.value(QStringLiteral("text")).toString();
+            QJsonObject typeArgs;
+            typeArgs[QStringLiteral("text")] = text;
+            toolEmulatorTypeText(typeArgs);
+
+        } else if (opType == QStringLiteral("wait_stable")) {
+            int timeout = op.value(QStringLiteral("timeout_ms")).toInt(5000);
+            int stable = op.value(QStringLiteral("stable_ms")).toInt(300);
+            waitForStableScreen(timeout, stable, 50);
+        }
+
+        executed++;
+        QThread::msleep(30);
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("executed")] = executed;
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+QJsonObject MCPServer::toolEmulatorOcrCalibrate(const QJsonObject &args)
+{
+    if (!emu_thread.isRunning()) {
+        return makeToolError(QStringLiteral("Emulator is not running"));
+    }
+
+    QString knownText = args.value(QStringLiteral("known_text")).toString();
+
+    if (knownText.isEmpty()) {
+        return makeToolError(QStringLiteral(
+            "Provide 'known_text' matching what's currently on the first visible "
+            "text line of the screen. Include ALL characters exactly as displayed. "
+            "Tip: type a known string into the REPL first, e.g. all printable ASCII."));
+    }
+
+    QImage image = renderFramebuffer();
+    if (image.isNull()) {
+        return makeToolError(QStringLiteral("Failed to capture framebuffer"));
+    }
+
+    image = image.convertToFormat(QImage::Format_ARGB32);
+
+    QVector<bool> binary = framebufferToBinary(image);
+    FontMetrics fm = detectFontMetrics(binary, 320, 240);
+
+    if (!fm.valid) {
+        return makeToolError(QStringLiteral("Could not detect font metrics. Is there text on screen?"));
+    }
+
+    m_ocrCharWidth = fm.charWidth;
+    m_ocrCharHeight = fm.charHeight;
+    m_ocrBaselineX = fm.startX;
+    m_ocrBaselineY = fm.startY;
+
+    m_ocrGlyphTable.clear();
+    int mapped = 0;
+
+    for (int i = 0; i < knownText.length() && i < fm.cols; ++i) {
+        char ch = knownText.at(i).toLatin1();
+        if (ch == 0) continue;
+
+        int cellX = fm.startX + i * fm.charWidth;
+        int cellY = fm.startY;
+
+        QByteArray glyph = extractGlyph(binary, 320, cellX, cellY, fm.charWidth, fm.charHeight);
+
+        bool allEmpty = true;
+        for (char b : glyph) { if (b != 0) { allEmpty = false; break; } }
+
+        if (ch == ' ') {
+            m_ocrGlyphTable[glyph] = ' ';
+            mapped++;
+        } else if (!allEmpty) {
+            m_ocrGlyphTable[glyph] = ch;
+            mapped++;
+        }
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("char_width")] = fm.charWidth;
+    result[QStringLiteral("char_height")] = fm.charHeight;
+    result[QStringLiteral("start_x")] = fm.startX;
+    result[QStringLiteral("start_y")] = fm.startY;
+    result[QStringLiteral("cols")] = fm.cols;
+    result[QStringLiteral("rows")] = fm.rows;
+    result[QStringLiteral("glyphs_mapped")] = mapped;
+    result[QStringLiteral("total_unique_glyphs")] = m_ocrGlyphTable.size();
+    return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+}
+
+QJsonObject MCPServer::toolEmulatorOcr(const QJsonObject &args)
+{
+    if (!emu_thread.isRunning()) {
+        return makeToolError(QStringLiteral("Emulator is not running"));
+    }
+
+    QImage image = renderFramebuffer();
+    if (image.isNull()) {
+        return makeToolError(QStringLiteral("Failed to capture framebuffer"));
+    }
+
+    image = image.convertToFormat(QImage::Format_ARGB32);
+    QVector<bool> binary = framebufferToBinary(image);
+
+    int charW, charH, startX, startY;
+
+    if (m_ocrCharWidth > 0) {
+        charW = m_ocrCharWidth;
+        charH = m_ocrCharHeight;
+        startX = m_ocrBaselineX;
+        startY = m_ocrBaselineY;
+    } else {
+        FontMetrics fm = detectFontMetrics(binary, 320, 240);
+        if (!fm.valid) {
+            return makeToolError(QStringLiteral(
+                "Could not detect text. Run emulator_ocr_calibrate first, "
+                "or ensure there is text on screen."));
+        }
+        charW = fm.charWidth;
+        charH = fm.charHeight;
+        startX = fm.startX;
+        startY = fm.startY;
+    }
+
+    int cols = (320 - startX) / charW;
+    int rows = (240 - startY) / charH;
+
+    int regionTop = args.value(QStringLiteral("line_start")).toInt(0);
+    int regionLines = args.value(QStringLiteral("line_count")).toInt(rows);
+    if (regionTop + regionLines > rows) regionLines = rows - regionTop;
+
+    QStringList lines;
+    int unknownCount = 0;
+
+    for (int row = regionTop; row < regionTop + regionLines; ++row) {
+        QString line;
+        int cellY = startY + row * charH;
+
+        for (int col = 0; col < cols; ++col) {
+            int cellX = startX + col * charW;
+
+            QByteArray glyph = extractGlyph(binary, 320, cellX, cellY, charW, charH);
+
+            bool allEmpty = true;
+            for (char b : glyph) { if (b != 0) { allEmpty = false; break; } }
+
+            if (allEmpty) {
+                line += QLatin1Char(' ');
+            } else if (m_ocrGlyphTable.contains(glyph)) {
+                line += QLatin1Char(m_ocrGlyphTable[glyph]);
+            } else {
+                line += QLatin1Char('?');
+                unknownCount++;
+            }
+        }
+
+        while (line.endsWith(QLatin1Char(' '))) line.chop(1);
+        lines.append(line);
+    }
+
+    while (!lines.isEmpty() && lines.last().isEmpty()) lines.removeLast();
+
+    QJsonObject result;
+    result[QStringLiteral("success")] = true;
+    result[QStringLiteral("text")] = lines.join(QStringLiteral("\n"));
+    result[QStringLiteral("lines")] = lines.size();
+    result[QStringLiteral("cols")] = cols;
+    result[QStringLiteral("char_size")] = QStringLiteral("%1x%2").arg(charW).arg(charH);
+    if (unknownCount > 0) {
+        result[QStringLiteral("unknown_glyphs")] = unknownCount;
+        result[QStringLiteral("hint")] = QStringLiteral("Run emulator_ocr_calibrate with known text to improve recognition");
+    }
+    result[QStringLiteral("calibrated")] = (m_ocrCharWidth > 0);
     return makeToolResult(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
 }

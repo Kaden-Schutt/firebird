@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QMutex>
 #include <QWaitCondition>
+#include <QHash>
+#include <QByteArray>
 
 class StdioReader;
 
@@ -80,6 +82,10 @@ private:
     QJsonObject toolEmulatorTrace(const QJsonObject &args);
     QJsonObject toolEmulatorFindFunctions(const QJsonObject &args);
     QJsonObject toolEmulatorDeployAndRun(const QJsonObject &args);
+    QJsonObject toolEmulatorGetScreenInfo();
+    QJsonObject toolEmulatorRunMacro(const QJsonObject &args);
+    QJsonObject toolEmulatorOcr(const QJsonObject &args);
+    QJsonObject toolEmulatorOcrCalibrate(const QJsonObject &args);
 
     // Internal helpers
     bool waitForStableScreen(int timeoutMs, int stableMs, int intervalMs, QString *screenshotPath = nullptr);
@@ -92,6 +98,13 @@ private:
 
     StdioReader *m_reader;
     bool m_initialized;
+
+    // OCR state
+    QHash<QByteArray, char> m_ocrGlyphTable;
+    int m_ocrCharWidth = 0;
+    int m_ocrCharHeight = 0;
+    int m_ocrBaselineX = 0;
+    int m_ocrBaselineY = 0;
 
 public:
     // For async file operations (public for callbacks)
