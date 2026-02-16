@@ -9,6 +9,7 @@
 #include "mcp_headless.h"
 
 static bool mcp_mode = false;
+static int tcp_port = 0;
 
 void gui_do_stuff(bool wait)
 {
@@ -156,6 +157,11 @@ int main(int argc, char *argv[])
 		}
 		else if(strcmp(argv[argi], "--mcp") == 0)
 			mcp_mode = true;
+		else if(strcmp(argv[argi], "--tcp") == 0)
+		{
+			mcp_mode = true;
+			tcp_port = atoi(argv[++argi]);
+		}
 		else
 		{
 			fprintf(stderr, "Unknown argument '%s'.\n", argv[argi]);
@@ -174,8 +180,12 @@ int main(int argc, char *argv[])
 	path_boot1 = boot1;
 	path_flash = flash;
 
-	if (mcp_mode)
-		mcp_init();
+	if (mcp_mode) {
+		if (tcp_port > 0)
+			mcp_init_tcp(tcp_port);
+		else
+			mcp_init();
+	}
 
 	if(!emu_start(0, 0, snapshot))
 		return 1;

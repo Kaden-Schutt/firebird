@@ -11,6 +11,10 @@
 #include <errno.h>
 #include <time.h>
 #include <poll.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "mcp_headless.h"
 #include "mcp_keymap.h"
@@ -48,10 +52,52 @@ uint64_t mcp_time_us(void)
     return (uint64_t)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
 }
 
+// Base64 encoding for screenshot data
+static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static char *base64_encode(const uint8_t *data, int len)
+{
+    int out_len = 4 * ((len + 2) / 3);
+    char *out = (char *)malloc(out_len + 1);
+    if (!out) return NULL;
+
+    int i, j;
+    for (i = 0, j = 0; i < len - 2; i += 3) {
+        out[j++] = b64_table[(data[i] >> 2) & 0x3F];
+        out[j++] = b64_table[((data[i] & 0x3) << 4) | (data[i+1] >> 4)];
+        out[j++] = b64_table[((data[i+1] & 0xF) << 2) | (data[i+2] >> 6)];
+        out[j++] = b64_table[data[i+2] & 0x3F];
+    }
+    if (i < len) {
+        out[j++] = b64_table[(data[i] >> 2) & 0x3F];
+        if (i == len - 1) {
+            out[j++] = b64_table[((data[i] & 0x3) << 4)];
+            out[j++] = '=';
+        } else {
+            out[j++] = b64_table[((data[i] & 0x3) << 4) | (data[i+1] >> 4)];
+            out[j++] = b64_table[((data[i+1] & 0xF) << 2)];
+        }
+        out[j++] = '=';
+    }
+    out[j] = '\0';
+    return out;
+}
+
+// Send a raw JSON line to the client (stdout or TCP)
 static void mcp_send_raw(const char *json)
 {
-    fprintf(stdout, "%s\n", json);
-    fflush(stdout);
+    if (mcp.tcp_port > 0) {
+        // TCP mode
+        if (mcp.client_fd < 0) return; // no client connected
+        int len = strlen(json);
+        // Write JSON + newline, ignoring partial writes for simplicity
+        write(mcp.client_fd, json, len);
+        write(mcp.client_fd, "\n", 1);
+    } else {
+        // stdin/stdout mode
+        fprintf(stdout, "%s\n", json);
+        fflush(stdout);
+    }
 }
 
 static void mcp_send_json(cJSON *root)
@@ -260,7 +306,7 @@ static void tool_emulator_screenshot(int id, cJSON *params)
         cJSON_AddNumberToObject(r, "height", 240);
         mcp_respond(id, r);
     } else {
-        // Encode to memory, return base64
+        // Encode to memory, return base64 in response
         struct png_write_ctx ctx = {NULL, 0, 0};
         stbi_write_png_to_func(png_write_func, &ctx, 320, 240, 3, rgb, 320 * 3);
         free(rgb);
@@ -271,22 +317,20 @@ static void tool_emulator_screenshot(int id, cJSON *params)
             return;
         }
 
-        // Write to temp file
-        char tmppath[] = "/tmp/firebird_screenshot_XXXXXX.png";
-        // Use mkstemp-like approach
-        snprintf(tmppath, sizeof(tmppath), "/tmp/firebird_screenshot_%d.png", (int)getpid());
-        FILE *f = fopen(tmppath, "wb");
-        if (f) {
-            fwrite(ctx.data, 1, ctx.size, f);
-            fclose(f);
-        }
+        char *b64 = base64_encode(ctx.data, ctx.size);
         free(ctx.data);
 
+        if (!b64) {
+            mcp_respond_error(id, -1, "base64 encode failed");
+            return;
+        }
+
         cJSON *r = cJSON_CreateObject();
-        cJSON_AddStringToObject(r, "path", tmppath);
+        cJSON_AddStringToObject(r, "png_base64", b64);
         cJSON_AddNumberToObject(r, "width", 320);
         cJSON_AddNumberToObject(r, "height", 240);
         mcp_respond(id, r);
+        free(b64);
     }
 }
 
@@ -710,6 +754,38 @@ static void handle_tools_list(int id, cJSON *params)
     mcp_respond(id, r);
 }
 
+// Unified tool dispatch — returns true if tool was found
+static bool dispatch_tool(int id, const char *name, cJSON *args)
+{
+    if (strcmp(name, "emulator_status") == 0)
+        tool_emulator_status(id, args);
+    else if (strcmp(name, "emulator_pause") == 0)
+        tool_emulator_pause(id, args);
+    else if (strcmp(name, "emulator_set_turbo") == 0)
+        tool_emulator_set_turbo(id, args);
+    else if (strcmp(name, "emulator_screenshot") == 0)
+        tool_emulator_screenshot(id, args);
+    else if (strcmp(name, "emulator_press_key") == 0)
+        tool_emulator_press_key(id, args);
+    else if (strcmp(name, "emulator_type_text") == 0)
+        tool_emulator_type_text(id, args);
+    else if (strcmp(name, "emulator_read_memory") == 0)
+        tool_emulator_read_memory(id, args);
+    else if (strcmp(name, "emulator_write_memory") == 0)
+        tool_emulator_write_memory(id, args);
+    else if (strcmp(name, "emulator_get_registers") == 0)
+        tool_emulator_get_registers(id, args);
+    else if (strcmp(name, "emulator_upload_file") == 0)
+        tool_emulator_upload_file(id, args);
+    else if (strcmp(name, "emulator_download_file") == 0)
+        tool_emulator_download_file(id, args);
+    else if (strcmp(name, "emulator_list_files") == 0)
+        tool_emulator_list_files(id, args);
+    else
+        return false;
+    return true;
+}
+
 static void handle_tools_call(int id, cJSON *params)
 {
     const char *name = param_str(params, "name", NULL);
@@ -719,33 +795,7 @@ static void handle_tools_call(int id, cJSON *params)
         mcp_respond_error(id, -32602, "Missing tool name");
         return;
     }
-
-    // Dispatch to tool handlers
-    if (strcmp(name, "emulator_status") == 0)
-        tool_emulator_status(id, arguments);
-    else if (strcmp(name, "emulator_pause") == 0)
-        tool_emulator_pause(id, arguments);
-    else if (strcmp(name, "emulator_set_turbo") == 0)
-        tool_emulator_set_turbo(id, arguments);
-    else if (strcmp(name, "emulator_screenshot") == 0)
-        tool_emulator_screenshot(id, arguments);
-    else if (strcmp(name, "emulator_press_key") == 0)
-        tool_emulator_press_key(id, arguments);
-    else if (strcmp(name, "emulator_type_text") == 0)
-        tool_emulator_type_text(id, arguments);
-    else if (strcmp(name, "emulator_read_memory") == 0)
-        tool_emulator_read_memory(id, arguments);
-    else if (strcmp(name, "emulator_write_memory") == 0)
-        tool_emulator_write_memory(id, arguments);
-    else if (strcmp(name, "emulator_get_registers") == 0)
-        tool_emulator_get_registers(id, arguments);
-    else if (strcmp(name, "emulator_upload_file") == 0)
-        tool_emulator_upload_file(id, arguments);
-    else if (strcmp(name, "emulator_download_file") == 0)
-        tool_emulator_download_file(id, arguments);
-    else if (strcmp(name, "emulator_list_files") == 0)
-        tool_emulator_list_files(id, arguments);
-    else
+    if (!dispatch_tool(id, name, arguments))
         mcp_respond_error(id, -32601, "Unknown tool");
 }
 
@@ -789,8 +839,11 @@ static void mcp_handle_message(const char *line)
         cJSON *r = cJSON_CreateObject();
         mcp_respond(id, r);
     } else {
-        if (id >= 0)
-            mcp_respond_error(id, -32601, "Method not found");
+        // Try direct tool dispatch (method name = tool name)
+        if (!dispatch_tool(id, method, params)) {
+            if (id >= 0)
+                mcp_respond_error(id, -32601, "Method not found");
+        }
     }
 
     cJSON_Delete(msg);
@@ -802,6 +855,9 @@ void mcp_init(void)
 {
     memset(&mcp, 0, sizeof(mcp));
     mcp.enabled = true;
+    mcp.tcp_port = 0;
+    mcp.listen_fd = -1;
+    mcp.client_fd = -1;
     debug_out = stderr;
 
     // Set stdin non-blocking
@@ -811,30 +867,117 @@ void mcp_init(void)
     // Ensure stdout is line-buffered for JSON-RPC
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    fprintf(debug_out, "[MCP] Headless MCP server initialized\n");
+    fprintf(debug_out, "[MCP] Headless MCP server initialized (stdin mode)\n");
 }
 
-void mcp_poll(void)
+void mcp_init_tcp(int port)
 {
-    if (!mcp.enabled) return;
+    memset(&mcp, 0, sizeof(mcp));
+    mcp.enabled = true;
+    mcp.initialized = true; // skip MCP handshake for TCP mode
+    mcp.tcp_port = port;
+    mcp.client_fd = -1;
+    debug_out = stderr;
 
-    // Process any pending async operations
-    mcp_process_pending();
+    // Ignore SIGPIPE so writes to closed sockets don't kill us
+    signal(SIGPIPE, SIG_IGN);
 
-    // Try to read lines from stdin (non-blocking)
+    // Create listening socket
+    mcp.listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (mcp.listen_fd < 0) {
+        fprintf(debug_out, "[MCP] Failed to create TCP socket: %s\n", strerror(errno));
+        return;
+    }
+
+    int opt = 1;
+    setsockopt(mcp.listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+
+    if (bind(mcp.listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fprintf(debug_out, "[MCP] Failed to bind port %d: %s\n", port, strerror(errno));
+        close(mcp.listen_fd);
+        mcp.listen_fd = -1;
+        return;
+    }
+
+    if (listen(mcp.listen_fd, 2) < 0) {
+        fprintf(debug_out, "[MCP] Failed to listen: %s\n", strerror(errno));
+        close(mcp.listen_fd);
+        mcp.listen_fd = -1;
+        return;
+    }
+
+    // Set non-blocking
+    int flags = fcntl(mcp.listen_fd, F_GETFL, 0);
+    fcntl(mcp.listen_fd, F_SETFL, flags | O_NONBLOCK);
+
+    fprintf(debug_out, "[MCP] TCP server listening on 0.0.0.0:%d\n", port);
+}
+
+static void mcp_tcp_disconnect_client(void)
+{
+    if (mcp.client_fd >= 0) {
+        close(mcp.client_fd);
+        mcp.client_fd = -1;
+        mcp.line_pos = 0;
+
+        // Cancel any pending operation (client won't receive response)
+        if (mcp.pending != MCP_PENDING_NONE) {
+            // Clean up pending key press
+            if (mcp.pending == MCP_PENDING_KEY_PRESS)
+                keypad_set_key(mcp.key_row, mcp.key_col, false);
+            // Clean up pending type
+            if (mcp.pending == MCP_PENDING_TYPE_TEXT) {
+                if (mcp.type_key_down)
+                    keypad_set_key(mcp.type_cur_row, mcp.type_cur_col, false);
+                free(mcp.type_text_alloc);
+                mcp.type_text_alloc = NULL;
+                mcp.type_text = NULL;
+            }
+            mcp.pending = MCP_PENDING_NONE;
+            fprintf(debug_out, "[MCP] Client disconnected, cancelled pending op\n");
+        }
+    }
+}
+
+static void mcp_poll_tcp(void)
+{
+    // Accept new connection if none active
+    if (mcp.client_fd < 0 && mcp.listen_fd >= 0) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int fd = accept(mcp.listen_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (fd >= 0) {
+            // Set non-blocking
+            int flags = fcntl(fd, F_GETFL, 0);
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            mcp.client_fd = fd;
+            mcp.line_pos = 0;
+            fprintf(debug_out, "[MCP] Client connected from %s:%d\n",
+                    inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        }
+    }
+
+    // Read from active client
+    if (mcp.client_fd < 0) return;
+
     for (;;) {
-        struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
-        int ret = poll(&pfd, 1, 0); // non-blocking poll
+        struct pollfd pfd = { mcp.client_fd, POLLIN, 0 };
+        int ret = poll(&pfd, 1, 0);
         if (ret <= 0) break;
         if (!(pfd.revents & POLLIN)) break;
 
         char buf[4096];
-        ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+        ssize_t n = read(mcp.client_fd, buf, sizeof(buf));
         if (n <= 0) {
             if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-                // EOF or error — client disconnected
-                fprintf(debug_out, "[MCP] stdin closed, exiting\n");
-                exiting = true;
+                fprintf(debug_out, "[MCP] Client disconnected\n");
+                mcp_tcp_disconnect_client();
             }
             break;
         }
@@ -843,13 +986,55 @@ void mcp_poll(void)
         for (ssize_t i = 0; i < n; i++) {
             if (buf[i] == '\n') {
                 mcp.line_buf[mcp.line_pos] = '\0';
-                if (mcp.line_pos > 0) {
+                if (mcp.line_pos > 0)
                     mcp_handle_message(mcp.line_buf);
-                }
                 mcp.line_pos = 0;
             } else if (mcp.line_pos < MCP_LINE_BUF_SIZE - 1) {
                 mcp.line_buf[mcp.line_pos++] = buf[i];
             }
         }
     }
+}
+
+static void mcp_poll_stdin(void)
+{
+    for (;;) {
+        struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+        int ret = poll(&pfd, 1, 0);
+        if (ret <= 0) break;
+        if (!(pfd.revents & POLLIN)) break;
+
+        char buf[4096];
+        ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+        if (n <= 0) {
+            if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+                fprintf(debug_out, "[MCP] stdin closed, exiting\n");
+                exiting = true;
+            }
+            break;
+        }
+
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n') {
+                mcp.line_buf[mcp.line_pos] = '\0';
+                if (mcp.line_pos > 0)
+                    mcp_handle_message(mcp.line_buf);
+                mcp.line_pos = 0;
+            } else if (mcp.line_pos < MCP_LINE_BUF_SIZE - 1) {
+                mcp.line_buf[mcp.line_pos++] = buf[i];
+            }
+        }
+    }
+}
+
+void mcp_poll(void)
+{
+    if (!mcp.enabled) return;
+
+    mcp_process_pending();
+
+    if (mcp.tcp_port > 0)
+        mcp_poll_tcp();
+    else
+        mcp_poll_stdin();
 }

@@ -20,8 +20,11 @@ enum mcp_pending_type {
     MCP_PENDING_DIRLIST,      // waiting for usblink dirlist callback
 };
 
-// Max line buffer for stdin JSON-RPC
+// Max line buffer for JSON-RPC
 #define MCP_LINE_BUF_SIZE 65536
+
+// Default TCP port
+#define MCP_DEFAULT_PORT 3334
 
 // Max dirlist entries
 #define MCP_DIRLIST_MAX 512
@@ -36,7 +39,12 @@ struct mcp_state {
     bool enabled;
     bool initialized;
 
-    // Line buffer for stdin
+    // Transport mode
+    int tcp_port;       // 0 = stdin mode, >0 = TCP mode
+    int listen_fd;      // TCP listening socket (-1 if not TCP)
+    int client_fd;      // Current TCP client (-1 if none)
+
+    // Line buffer
     char line_buf[MCP_LINE_BUF_SIZE];
     int line_pos;
 
@@ -70,10 +78,13 @@ struct mcp_state {
 
 extern struct mcp_state mcp;
 
-// Initialize MCP (set stdin non-blocking, send nothing until client initializes)
+// Initialize MCP in stdin mode (JSON-RPC over stdin/stdout)
 void mcp_init(void);
 
-// Poll for incoming JSON-RPC on stdin, process pending ops
+// Initialize MCP in TCP mode (JSON-RPC over TCP socket)
+void mcp_init_tcp(int port);
+
+// Poll for incoming JSON-RPC, process pending ops
 // Called from gui_do_stuff()
 void mcp_poll(void);
 
