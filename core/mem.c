@@ -1,3 +1,7 @@
+#ifdef __linux__
+#define _DEFAULT_SOURCE
+#include <sys/mman.h>
+#endif
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -542,7 +546,12 @@ bool memory_resume(const emu_snapshot *snapshot)
             && memory_initialize(sdram_size)
             && (memory_reset(), true) // To have peripherals register with sched
             && snapshot_read(snapshot, mem_and_flags, MEM_MAXSIZE)
+
+#ifdef __linux__
+            && (madvise(mem_and_flags + MEM_MAXSIZE, MEM_MAXSIZE, MADV_DONTNEED) == 0) // Release flag pages; re-faulted as zero (MAP_ANON)
+#else
             && memset(mem_and_flags + MEM_MAXSIZE, 0, MEM_MAXSIZE) // Set all flags to 0
+#endif
             && misc_resume(snapshot)
             && keypad_resume(snapshot)
             && usb_resume(snapshot)

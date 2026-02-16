@@ -14,3 +14,4 @@ qrc_*.cpp
 ui_*.h
 firebird-emu
 *.snapshot
+build-*/

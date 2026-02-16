@@ -1,13 +1,19 @@
 #include <errno.h>
+#include <unistd.h>
 
 #include "core/debug.h"
 #include "core/emu.h"
 #include "core/mem.h"
 #include "core/mmu.h"
 #include "core/usblink_queue.h"
+#include "mcp_headless.h"
+
+static bool mcp_mode = false;
 
 void gui_do_stuff(bool wait)
 {
+	if (mcp_mode)
+		mcp_poll();
 }
 
 void do_stuff(int i)
@@ -26,7 +32,11 @@ void gui_debug_printf(const char *fmt, ...)
 
 void gui_debug_vprintf(const char *fmt, va_list ap)
 {
-    vprintf(fmt, ap);
+    // When MCP is active, debug output goes to stderr (stdout is JSON-RPC)
+    if (mcp_mode)
+        vfprintf(stderr, fmt, ap);
+    else
+        vprintf(fmt, ap);
 }
 
 void gui_status_printf(const char *fmt, ...)
@@ -36,7 +46,10 @@ void gui_status_printf(const char *fmt, ...)
 
     gui_debug_vprintf(fmt, ap);
 
-    putchar('\n');
+    if (mcp_mode)
+        fputc('\n', stderr);
+    else
+        putchar('\n');
 
     va_end(ap);
 }
@@ -51,19 +64,37 @@ void gui_debugger_entered_or_left(bool entered) {}
 void gui_debugger_request_input(debug_input_cb callback)
 {
     if(!callback) return;
+    if (mcp_mode) {
+        // In MCP mode, debugger input is not supported
+        callback("");
+        return;
+    }
     static char debug_in[40];
     fgets(debug_in, sizeof(debug_in), stdin);
     callback(debug_in);
 }
 
-void gui_putchar(char c) { putc(c, stdout); }
+void gui_putchar(char c)
+{
+    if (mcp_mode)
+        fputc(c, stderr);
+    else
+        putc(c, stdout);
+}
+
 int gui_getchar() { return -1; }
 void gui_set_busy(bool busy) {}
 void gui_show_speed(double d) {}
 void gui_usblink_changed(bool state) {}
 void throttle_timer_off() {}
 void throttle_timer_on() {}
-void throttle_timer_wait(unsigned int usec) {}
+
+void throttle_timer_wait(unsigned int usec)
+{
+    // Actually sleep instead of spinning, saves CPU on constrained devices
+    if (usec > 0)
+        usleep(usec);
+}
 
 static const char OPT_BOOT1[]              = "--boot1";
 static const char OPT_FLASH[]              = "--flash";
@@ -123,6 +154,8 @@ int main(int argc, char *argv[])
 			show_help_menu();
 			return 0;
 		}
+		else if(strcmp(argv[argi], "--mcp") == 0)
+			mcp_mode = true;
 		else
 		{
 			fprintf(stderr, "Unknown argument '%s'.\n", argv[argi]);
@@ -140,6 +173,9 @@ int main(int argc, char *argv[])
 
 	path_boot1 = boot1;
 	path_flash = flash;
+
+	if (mcp_mode)
+		mcp_init();
 
 	if(!emu_start(0, 0, snapshot))
 		return 1;

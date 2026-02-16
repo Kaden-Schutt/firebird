@@ -1,6 +1,7 @@
-FLAGS := -g -O3 -DBENCHMARK -Wall -I..
-OUTPUT := firebird-headless
+SRCDIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+COREDIR := $(SRCDIR)/../core
 
+# Build directory: auto-named build-<arch>, override with BUILDDIR=xxx
 TOOLCHAIN_ARCH = $(shell LANG=C $(CC) -v 2>&1 | awk '/Target:(.*)/{ print $$2 }' | cut -d- -f1)
 TRANSLATION_ENABLED ?= TRUE
 SUPPORT_LINUX ?= TRUE
@@ -9,64 +10,115 @@ ifeq "$(TOOLCHAIN_ARCH)" ""
     $(error Could not determine the toolchain architecture, please specify manually)
 endif
 
+BUILDDIR ?= $(SRCDIR)/build-$(TOOLCHAIN_ARCH)
+
+# ---- Internal flags (always applied, not overridable) ----
+
+INT_FLAGS := -g -O3 -DBENCHMARK -Wall -I$(SRCDIR)/.. -I$(SRCDIR)/vendor
+
+# ---- Architecture-specific translation sources ----
+
+CORE_ASMSOURCES :=
+CORE_CSOURCES :=
+CORE_CPPSOURCES :=
+
 ifeq "$(TRANSLATION_ENABLED)" "TRUE"
     ifneq "$(filter i%86,$(TOOLCHAIN_ARCH))" ""
-        ASMSOURCES += ../core/asmcode_x86.S
-        CSOURCES += ../core/translation_x86.c
+        CORE_ASMSOURCES += asmcode_x86.S
+        CORE_CSOURCES += translation_x86.c
     else ifeq "$(TOOLCHAIN_ARCH)" "x86_64"
-        ASMSOURCES += ../core/asmcode_x86_64.S
-        CSOURCES += ../core/asmcode.c ../core/translate_x86_64.c
+        CORE_ASMSOURCES += asmcode_x86_64.S
+        CORE_CSOURCES += asmcode.c translate_x86_64.c
     else ifneq "$(filter arm%,$(TOOLCHAIN_ARCH))" ""
-        ASMSOURCES += ../core/asmcode_arm.S
-        CSOURCES += ../core/asmcode.c
-        CPPSOURCES += ../core/translate_arm.cpp
+        CORE_ASMSOURCES += asmcode_arm.S
+        CORE_CSOURCES += asmcode.c
+        CORE_CPPSOURCES += translate_arm.cpp
     else ifeq "$(TOOLCHAIN_ARCH)" "aarch64"
-        ASMSOURCES += ../core/asmcode_aarch64.S
-        CSOURCES += ../core/asmcode.c
-        CPPSOURCES += ../core/translate_aarch64.cpp
+        CORE_ASMSOURCES += asmcode_aarch64.S
+        CORE_CSOURCES += asmcode.c
+        CORE_CPPSOURCES += translate_aarch64.cpp
     else
         $(error Unknown architecture $(TOOLCHAIN_ARCH))
     endif
 else
-    CSOURCES += ../core/asmcode.c
-    FLAGS += -DNO_TRANSLATION
+    CORE_CSOURCES += asmcode.c
+    INT_FLAGS += -DNO_TRANSLATION
 endif
 
 ifeq "$(SUPPORT_LINUX)" "TRUE"
-    FLAGS += -DSUPPORT_LINUX
+    INT_FLAGS += -DSUPPORT_LINUX
 endif
 
-CFLAGS += -std=c11 $(FLAGS)
-CXXFLAGS += -std=c++11 $(FLAGS)
-LFLAGS +=
+# User-provided CFLAGS/CXXFLAGS/LFLAGS are appended (not overridden)
+ALL_CFLAGS   := -std=c11 $(INT_FLAGS) $(CFLAGS)
+ALL_CXXFLAGS := -std=c++11 $(INT_FLAGS) $(CXXFLAGS)
+ALL_LFLAGS   := $(LFLAGS)
 LIBS := -lz
 
-CSOURCES   += ../core/armsnippets_loader.c ../core/casplus.c ../core/des.c ../core/disasm.c ../core/gdbstub.c \
-              ../core/interrupt.c ../core/lcd.c ../core/link.c ../core/mem.c ../core/misc.c \
-              ../core/mmu.c ../core/schedule.c ../core/serial.c ../core/sha256.c ../core/usb.c ../core/usblink.c \
-              ../core/os/os-linux.c
+# ---- Source lists (basenames, relative to their respective dirs) ----
 
-CPPSOURCES += ../core/arm_interpreter.cpp ../core/coproc.cpp ../core/cpu.cpp ../core/debug.cpp ../core/emu.cpp \
-              ../core/flash.cpp ../core/gif.cpp ../core/thumb_interpreter.cpp ../core/usblink_queue.cpp main.cpp \
-              ../core/keypad.cpp ../core/cx2.cpp ../core/usb_cx2.cpp ../core/usblink_cx2.cpp ../core/fieldparser.cpp
+CORE_CSOURCES += armsnippets_loader.c casplus.c des.c disasm.c gdbstub.c \
+                 interrupt.c lcd.c link.c mem.c misc.c \
+                 mmu.c schedule.c serial.c sha256.c usb.c usblink.c
 
-OBJS = $(patsubst %.S, %.o, $(ASMSOURCES))
-OBJS += $(patsubst %.c, %.o, $(CSOURCES))
-OBJS += $(patsubst %.cpp, %.o, $(CPPSOURCES))
+CORE_CPPSOURCES += arm_interpreter.cpp coproc.cpp cpu.cpp debug.cpp emu.cpp \
+                   flash.cpp gif.cpp thumb_interpreter.cpp usblink_queue.cpp \
+                   keypad.cpp cx2.cpp usb_cx2.cpp usblink_cx2.cpp fieldparser.cpp
 
-all: $(OUTPUT)
+# os subdirectory under core
+CORE_OS_CSOURCES := os-linux.c
 
-%.o: %.S Makefile
-	$(CC) -c $(CFLAGS) $< -o $@
+# Local sources (relative to SRCDIR)
+LOCAL_CPPSOURCES := main.cpp mcp_headless.cpp
 
-%.o: %.c Makefile
-	$(CC) -c $(CFLAGS) $< -o $@
+# Vendor sources (relative to SRCDIR)
+VENDOR_CSOURCES := vendor/cJSON.c
 
-%.o: %.cpp Makefile
-	$(CXX) -c $(CXXFLAGS) $< -o $@
+# ---- Object file paths (all under BUILDDIR) ----
 
-$(OUTPUT): $(OBJS)
-	$(CXX) $(CXXFLAGS) $(LFLAGS) $^ $(LIBS) -o $@
+OBJS  = $(patsubst %.S, $(BUILDDIR)/core/%.o, $(CORE_ASMSOURCES))
+OBJS += $(patsubst %.c, $(BUILDDIR)/core/%.o, $(CORE_CSOURCES))
+OBJS += $(patsubst %.cpp, $(BUILDDIR)/core/%.o, $(CORE_CPPSOURCES))
+OBJS += $(patsubst %.c, $(BUILDDIR)/core/os/%.o, $(CORE_OS_CSOURCES))
+OBJS += $(patsubst %.cpp, $(BUILDDIR)/%.o, $(LOCAL_CPPSOURCES))
+OBJS += $(patsubst %.c, $(BUILDDIR)/%.o, $(VENDOR_CSOURCES))
+
+OUTPUT_BIN := $(BUILDDIR)/firebird-headless
+
+all: $(OUTPUT_BIN)
+
+# ---- Compile rules ----
+
+$(BUILDDIR)/core/%.o: $(COREDIR)/%.S Makefile
+	@mkdir -p $(dir $@)
+	$(CC) -c $(ALL_CFLAGS) $< -o $@
+
+$(BUILDDIR)/core/%.o: $(COREDIR)/%.c Makefile
+	@mkdir -p $(dir $@)
+	$(CC) -c $(ALL_CFLAGS) $< -o $@
+
+$(BUILDDIR)/core/%.o: $(COREDIR)/%.cpp Makefile
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(ALL_CXXFLAGS) $< -o $@
+
+$(BUILDDIR)/core/os/%.o: $(COREDIR)/os/%.c Makefile
+	@mkdir -p $(dir $@)
+	$(CC) -c $(ALL_CFLAGS) $< -o $@
+
+$(BUILDDIR)/%.o: $(SRCDIR)/%.c Makefile
+	@mkdir -p $(dir $@)
+	$(CC) -c $(ALL_CFLAGS) $< -o $@
+
+$(BUILDDIR)/%.o: $(SRCDIR)/%.cpp Makefile
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(ALL_CXXFLAGS) $< -o $@
+
+# ---- Link ----
+
+$(OUTPUT_BIN): $(OBJS)
+	$(CXX) $(ALL_CXXFLAGS) $(ALL_LFLAGS) $^ $(LIBS) -o $@
 
 clean:
-	rm -f $(OBJS) $(OUTPUT)
+	rm -rf $(BUILDDIR)
+
+.PHONY: all clean
