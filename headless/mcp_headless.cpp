@@ -553,6 +553,29 @@ static void tool_emulator_list_files(int id, cJSON *params)
     usblink_queue_dirlist(std::string(path), usb_dirlist_cb, NULL);
 }
 
+// Forward declare from core
+extern "C" bool emu_suspend(const char *file);
+
+static void tool_save_snapshot(int id, cJSON *params)
+{
+    const char *path = param_str(params, "path", NULL);
+    if (!path) {
+        mcp_respond_error(id, -32602, "Missing 'path' parameter");
+        return;
+    }
+
+    bool ok = emu_suspend(path);
+    if (!ok) {
+        mcp_respond_error(id, -32000, "Failed to save snapshot");
+        return;
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "path", path);
+    cJSON_AddBoolToObject(r, "success", true);
+    mcp_respond(id, r);
+}
+
 // ---- Pending Operation Processing ----
 
 static void mcp_process_pending(void)
@@ -750,6 +773,11 @@ static void handle_tools_list(int id, cJSON *params)
         "List files in a directory on the calculator",
         make_schema("{\"path\":{\"type\":\"string\",\"description\":\"Directory path on calculator (e.g., '/documents')\"}}")));
 
+    // emulator_save_snapshot
+    cJSON_AddItemToArray(tools, make_tool("emulator_save_snapshot",
+        "Save emulator state to a snapshot file",
+        make_schema("{\"path\":{\"type\":\"string\",\"description\":\"Path to save snapshot file\"}}")));
+
     cJSON_AddItemToObject(r, "tools", tools);
     mcp_respond(id, r);
 }
@@ -781,6 +809,8 @@ static bool dispatch_tool(int id, const char *name, cJSON *args)
         tool_emulator_download_file(id, args);
     else if (strcmp(name, "emulator_list_files") == 0)
         tool_emulator_list_files(id, args);
+    else if (strcmp(name, "emulator_save_snapshot") == 0)
+        tool_save_snapshot(id, args);
     else
         return false;
     return true;
