@@ -13,6 +13,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/mman.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -33,6 +34,8 @@ extern "C" {
 #include "core/debug.h"
 #include "core/usblink.h"
 #include "core/usblink_queue.h"
+
+// From translate_aarch64.cpp — pointer to JIT code buffer
 
 // stb_image_write implementation
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -223,6 +226,7 @@ static void tool_emulator_status(int id, cJSON *params)
     cJSON_AddBoolToObject(r, "is_running", !exiting);
     cJSON_AddBoolToObject(r, "turbo_mode", turbo_mode);
     cJSON_AddBoolToObject(r, "paused", (cpu_events & EVENT_WAITING) != 0);
+    cJSON_AddBoolToObject(r, "sleeping", mcp.sleeping);
     mcp_respond(id, r);
 }
 
@@ -556,6 +560,98 @@ static void tool_emulator_list_files(int id, cJSON *params)
 // Forward declare from core
 extern "C" bool emu_suspend(const char *file);
 
+// ---- Sleep/wake: release addr_cache via mprotect + lazy SIGSEGV handler ----
+
+static bool ac_pages_protected = false;  // true while addr_cache is PROT_NONE
+
+static void ac_sigsegv_handler(int sig, siginfo_t *info, void *ucontext)
+{
+    (void)sig; (void)ucontext;
+    if (ac_pages_protected && info && info->si_addr) {
+        uintptr_t fault = (uintptr_t)info->si_addr;
+        uintptr_t ac_start = (uintptr_t)addr_cache;
+        uintptr_t ac_end = ac_start + AC_NUM_ENTRIES * sizeof(ac_entry);
+
+        if (fault >= ac_start && fault < ac_end) {
+            // Fault is in addr_cache — restore this page and fill with 0xFF (invalid)
+            long ps = sysconf(_SC_PAGE_SIZE);
+            void *page = (void *)(fault & ~((uintptr_t)ps - 1));
+            mprotect(page, ps, PROT_READ | PROT_WRITE);
+            memset(page, 0xFF, ps);
+            return;  // Resume execution
+        }
+    }
+
+    // Not our fault — re-raise with default handler
+    struct sigaction sa;
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGSEGV, &sa, NULL);
+    raise(SIGSEGV);
+}
+
+static void ac_install_sigsegv_handler(void)
+{
+    struct sigaction sa;
+    sa.sa_sigaction = ac_sigsegv_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+}
+
+// ac_remove_sigsegv_handler is intentionally not called — the handler stays
+// installed permanently since it only activates when ac_pages_protected is true.
+
+static void tool_emulator_sleep(int id, cJSON *params)
+{
+    (void)params;
+
+    if (mcp.sleeping) {
+        mcp_respond_error(id, -32000, "Already sleeping");
+        return;
+    }
+
+    // Install SIGSEGV handler BEFORE protecting pages
+    ac_install_sigsegv_handler();
+
+    // Release addr_cache physical pages and protect against access.
+    // madvise(DONTNEED) releases pages, mprotect(NONE) ensures accesses trigger
+    // SIGSEGV so our handler can lazily fill pages with 0xFF (invalid AC entries).
+    // Zero-filled pages would be misinterpreted as valid translation pointers.
+    size_t ac_size = AC_NUM_ENTRIES * sizeof(ac_entry);
+    madvise(addr_cache, ac_size, MADV_DONTNEED);
+    mprotect(addr_cache, ac_size, PROT_NONE);
+    ac_pages_protected = true;
+
+    // Set sleeping — gui_do_stuff will block in a poll loop,
+    // preventing the CPU from executing into protected memory
+    mcp.sleeping = true;
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "sleeping", true);
+    mcp_respond(id, r);
+}
+
+static void tool_emulator_wake(int id, cJSON *params)
+{
+    (void)params;
+
+    if (!mcp.sleeping) {
+        mcp_respond_error(id, -32000, "Not sleeping");
+        return;
+    }
+
+    // Clear sleeping — gui_do_stuff blocking loop will exit,
+    // returning control to the CPU execution loop.
+    // addr_cache pages will be lazily rebuilt by SIGSEGV handler as CPU accesses them.
+    mcp.sleeping = false;
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "sleeping", false);
+    mcp_respond(id, r);
+}
+
 static void tool_save_snapshot(int id, cJSON *params)
 {
     const char *path = param_str(params, "path", NULL);
@@ -778,6 +874,16 @@ static void handle_tools_list(int id, cJSON *params)
         "Save emulator state to a snapshot file",
         make_schema("{\"path\":{\"type\":\"string\",\"description\":\"Path to save snapshot file\"}}")));
 
+    // emulator_sleep
+    cJSON_AddItemToArray(tools, make_tool("emulator_sleep",
+        "Suspend emulator to minimal RAM (releases ~145MB). Pauses CPU and discards rebuildable caches.",
+        make_schema("")));
+
+    // emulator_wake
+    cJSON_AddItemToArray(tools, make_tool("emulator_wake",
+        "Wake emulator from sleep. Caches rebuild on demand (brief JIT warmup).",
+        make_schema("")));
+
     cJSON_AddItemToObject(r, "tools", tools);
     mcp_respond(id, r);
 }
@@ -811,6 +917,10 @@ static bool dispatch_tool(int id, const char *name, cJSON *args)
         tool_emulator_list_files(id, args);
     else if (strcmp(name, "emulator_save_snapshot") == 0)
         tool_save_snapshot(id, args);
+    else if (strcmp(name, "emulator_sleep") == 0)
+        tool_emulator_sleep(id, args);
+    else if (strcmp(name, "emulator_wake") == 0)
+        tool_emulator_wake(id, args);
     else
         return false;
     return true;

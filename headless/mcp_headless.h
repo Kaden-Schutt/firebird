@@ -38,6 +38,7 @@ struct mcp_dirlist_entry {
 struct mcp_state {
     bool enabled;
     bool initialized;
+    bool sleeping;      // true = emulator suspended via madvise, minimal RAM
 
     // Transport mode
     int tcp_port;       // 0 = stdin mode, >0 = TCP mode

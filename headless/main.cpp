@@ -13,8 +13,17 @@ static int tcp_port = 0;
 
 void gui_do_stuff(bool wait)
 {
-	if (mcp_mode)
+	if (mcp_mode) {
 		mcp_poll();
+		// While sleeping, block here to prevent returning to the CPU loop.
+		// This is called from throttle_interval_event inside cpu_arm_loop,
+		// so blocking here keeps the CPU from executing into madvised memory.
+		// Wake (via mcp_poll) clears mcp.sleeping to break us out.
+		while (mcp.sleeping) {
+			usleep(10000); // 10ms
+			mcp_poll();
+		}
+	}
 }
 
 void do_stuff(int i)

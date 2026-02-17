@@ -867,6 +867,11 @@ void flush_translations()
 	jump_table_current = jump_table;
 }
 
+extern "C" void *translate_buffer_ptr()
+{
+	return translate_buffer;
+}
+
 void invalidate_translation(int index)
 {
 	/* Due to translation_jmp using absolute pointers in the JIT, we can't just
